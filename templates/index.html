@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ניהול הוצאות</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        .sortable {
+            cursor: pointer;
+        }
+        .sortable:hover {
+            background-color: rgba(0,0,0,0.1);
+        }
+        .table-responsive {
+            margin-bottom: 2rem;
+        }
+        .monthly-total {
+            font-weight: bold;
+            background-color: #f8f9fa;
+        }
+        .filter-row th {
+            padding: 0.5rem;
+        }
+        .filter-row input {
+            width: 100%;
+            padding: 0.25rem;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="bg-light">
+    <div class="container-fluid py-4">
+        <!-- כותרת ראשית -->
+        <h1 class="text-center mb-4">מעקב הוצאות</h1>
+
+        <!-- טופס הזנת נתונים -->
+        <div class="card shadow-sm mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="card-title mb-0">הזנת נתונים</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <textarea id="expenseInput" class="form-control" rows="5" 
+                        placeholder="הכנס נתוני CSV (תאריך עסקה, שם בית העסק, סכום (₪), ענף, הערות)"></textarea>
+                </div>
+                <button onclick="processData()" class="btn btn-primary">
+                    <i class="bi bi-arrow-clockwise"></i> עיבוד נתונים
+                </button>
+            </div>
+        </div>
+
+        <!-- טבלת הוצאות -->
+        <div class="card shadow-sm">
+            <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">טבלת הוצאות</h5>
+                <div class="d-flex gap-2">
+                    <button onclick="exportToExcel()" class="btn btn-sm btn-success">
+                        <i class="bi bi-file-earmark-excel"></i> ייצוא ל-Excel
+                    </button>
+                    <button onclick="clearAllData()" class="btn btn-sm btn-danger">
+                        <i class="bi bi-trash"></i> איפוס נתונים
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="expensesContainer"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- מודל לכפילויות -->
+    <div class="modal fade" id="duplicatesModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">נמצאו כפילויות</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>תאריך</th>
+                                    <th>תיאור</th>
+                                    <th>סכום</th>
+                                    <th>קטגוריה</th>
+                                    <th>הערות</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-danger" onclick="removeDuplicates()">הסר כפילויות</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">סגור</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // פונקציה ליצירת טבלה חודשית
+        function createMonthlyTable(expenses, monthYear) {
+            const tableWrapper = document.createElement('div');
+            tableWrapper.className = 'table-responsive mb-4';
+
+            const monthHeader = document.createElement('h4');
+            monthHeader.className = 'mb-3';
+            const [month, year] = monthYear.split('/');
+            monthHeader.textContent = `${getMonthName(parseInt(month))} ${year}`;
+            tableWrapper.appendChild(monthHeader);
+
+            const table = document.createElement('table');
+            table.className = 'table table-striped table-hover';
+            table.dataset.monthYear = monthYear;
+
+            // כותרת הטבלה
+            const thead = document.createElement('thead');
+            thead.innerHTML = `
+                <tr>
+                    <th class="sortable" onclick="sortTable(this, 'date')">תאריך <i class="bi bi-arrow-down-up"></i></th>
+                    <th class="sortable" onclick="sortTable(this, 'description')">תיאור <i class="bi bi-arrow-down-up"></i></th>
+                    <th class="sortable" onclick="sortTable(this, 'amount')">סכום <i class="bi bi-arrow-down-up"></i></th>
+                    <th class="sortable" onclick="sortTable(this, 'category')">קטגוריה <i class="bi bi-arrow-down-up"></i></th>
+                    <th>הערות</th>
+                    <th>פעולות</th>
+                </tr>
+                <tr class="filter-row">
+                    <th><input type="text" onkeyup="filterTable(this)" data-column="date" placeholder="סנן תאריך..."></th>
+                    <th><input type="text" onkeyup="filterTable(this)" data-column="description" placeholder="סנן תיאור..."></th>
+                    <th><input type="text" onkeyup="filterTable(this)" data-column="amount" placeholder="סנן סכום..."></th>
+                    <th><input type="text" onkeyup="filterTable(this)" data-column="category" placeholder="סנן קטגוריה..."></th>
+                    <th><input type="text" onkeyup="filterTable(this)" data-column="notes" placeholder="סנן הערות..."></th>
+                    <th></th>
+                </tr>
+            `;
+
+            const tbody = document.createElement('tbody');
+            let monthlyTotal = 0;
+
+            expenses.forEach(expense => {
+                const row = document.createElement('tr');
+                monthlyTotal += parseFloat(expense.amount);
+
+                row.innerHTML = `
+                    <td>${expense.date}</td>
+                    <td>${expense.description}</td>
+                    <td class="text-end">${formatCurrency(expense.amount)}</td>
+                    <td>${expense.category}</td>
+                    <td>${expense.notes || ''}</td>
+                    <td>
+                        <button class="btn btn-sm btn-danger" onclick="deleteExpense('${expense.id}')">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            // שורת סיכום
+            const tfoot = document.createElement('tfoot');
+            tfoot.innerHTML = `
+                <tr class="monthly-total">
+                    <td colspan="2"><strong>סה"כ לחודש</strong></td>
+                    <td class="text-end"><strong>${formatCurrency(monthlyTotal)}</strong></td>
+                    <td colspan="3"></td>
+                </tr>
+            `;
+
+            table.appendChild(thead);
+            table.appendChild(tbody);
+            table.appendChild(tfoot);
+            tableWrapper.appendChild(table);
+
+            return tableWrapper;
+        }
+
+        // פונקציה לסינון הטבלה
+        function filterTable(input) {
+            const column = input.dataset.column;
+            const value = input.value.toLowerCase();
+            const table = input.closest('table');
+            const rows = table.getElementsByTagName('tr');
+
+            for (let i = 2; i < rows.length - 1; i++) {
+                const row = rows[i];
+                const cell = row.querySelector(`td:nth-child(${getColumnIndex(column) + 1})`);
+                if (cell) {
+                    const text = cell.textContent.toLowerCase();
+                    row.style.display = text.includes(value) ? '' : 'none';
+                }
+            }
+
+            // עדכון הסכום הכולל
+            updateMonthlyTotal(table);
+        }
+
+        // פונקציה לעדכון הסכום החודשי
+        function updateMonthlyTotal(table) {
+            const rows = table.getElementsByTagName('tr');
+            let total = 0;
+
+            for (let i = 2; i < rows.length - 1; i++) {
+                const row = rows[i];
+                if (row.style.display !== 'none') {
+                    const amountCell = row.querySelector('td:nth-child(3)');
+                    if (amountCell) {
+                        const amount = parseFloat(amountCell.textContent.replace(/[^\d.-]/g, ''));
+                        if (!isNaN(amount)) {
+                            total += amount;
+                        }
+                    }
+                }
+            }
+
+            const totalRow = table.querySelector('tfoot tr td:nth-child(3)');
+            if (totalRow) {
+                totalRow.textContent = formatCurrency(total);
+            }
+        }
+
+        // פונקציה למציאת אינדקס העמודה
+        function getColumnIndex(column) {
+            const columns = {
+                'date': 0,
+                'description': 1,
+                'amount': 2,
+                'category': 3,
+                'notes': 4
+            };
+            return columns[column] || 0;
+        }
+    </script>
+    <script src="main.js"></script>
+</body>
+</html>
